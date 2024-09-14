@@ -1,0 +1,118 @@
+#pragma kernel BinaryFullyConnected
+
+StructuredBuffer<float> WeightBuffer;
+StructuredBuffer<float> BiasBuffer;
+
+StructuredBuffer<float> InputBuffer;
+//RWStructuredBuffer<float> OutputBuffer;
+RWStructuredBuffer<float> FCOutputBuffer;
+
+// Constants
+int InputDim;
+int OutputDim;
+int BatchSize;
+int ClassesNum;
+
+
+[numthreads(1, 1, 1)]
+void BinaryFullyConnected(uint3 id : SV_DispatchThreadID)
+{
+    int batchIndex = id.x;
+    // int outputIndex = id.y;
+    
+    for (int outputIndex = 0; outputIndex < OutputDim; outputIndex++)
+    {
+        float sum = 0.0f;
+        for (int k = 0; k < InputDim; k++)
+        {
+            sum += InputBuffer[batchIndex * InputDim + k] * WeightBuffer[k * OutputDim + outputIndex];
+        }
+        sum += BiasBuffer[outputIndex];
+        FCOutputBuffer[batchIndex * OutputDim + outputIndex] = sum;
+    }
+}
+
+
+#pragma kernel BatchNormalization
+
+StructuredBuffer<float> GammaBuffer;
+StructuredBuffer<float> BetaBuffer;
+StructuredBuffer<float> MeanBuffer;
+StructuredBuffer<float> StdBuffer;
+
+RWStructuredBuffer<float> BNOutputBuffer;
+
+[numthreads(1, 1, 1)]
+void BatchNormalization(uint3 id : SV_DispatchThreadID)
+{
+    int batchIndex = id.x;
+    // int outputIndex = id.y;
+
+    for (int outputIndex = 0; outputIndex < OutputDim; outputIndex++)
+    {
+        // 计算归一化值
+        float normalized = (FCOutputBuffer[batchIndex * OutputDim + outputIndex] - MeanBuffer[outputIndex]) / StdBuffer[outputIndex];
+    
+        // 计算输出
+        BNOutputBuffer[batchIndex * OutputDim + outputIndex] = GammaBuffer[outputIndex] * normalized + BetaBuffer[outputIndex];
+    }
+}
+
+
+#pragma kernel Softmax
+
+#define FLT_MAX 3.402823466e+38F
+RWStructuredBuffer<float> SMOutputBuffer;
+
+[numthreads(1, 1, 1)]
+void Softmax(uint3 id : SV_DispatchThreadID)
+{
+    int batchIndex = id.x;
+    
+    // 找到每个样本的最大值
+    float maxInput = -FLT_MAX;
+    float sum = 0.0;
+    for (int i = 0; i < ClassesNum; i++)
+    {
+        if (BNOutputBuffer[batchIndex * ClassesNum + i] > maxInput)
+        {
+            maxInput = BNOutputBuffer[batchIndex * ClassesNum + i];
+        }
+    }
+    
+    for (int j = 0; j < ClassesNum; j++)
+    {
+        SMOutputBuffer[batchIndex * ClassesNum + j] = exp(BNOutputBuffer[batchIndex * ClassesNum + j] - maxInput);
+        sum += SMOutputBuffer[batchIndex * ClassesNum + j];
+    }
+    
+    for (int k = 0; k < ClassesNum; k++)
+    {
+        SMOutputBuffer[batchIndex * ClassesNum + k] /= sum;
+    }
+}
+
+
+#pragma kernel SoftmaxMax
+
+RWStructuredBuffer<int> SMMaxOutputBuffer;
+
+[numthreads(1, 1, 1)]
+void SoftmaxMax(uint3 id : SV_DispatchThreadID)
+{
+    int batchIndex = id.x;
+    
+    float maxProb = -FLT_MAX;
+    int maxIndex = 0;
+    
+    for (int j = 0; j < ClassesNum; j++)
+    {
+        float prob = SMOutputBuffer[batchIndex * ClassesNum + j];
+        if (prob > maxProb)
+        {
+            maxProb = prob;
+            maxIndex = j;
+        }
+    }
+    SMMaxOutputBuffer[batchIndex] = maxIndex;
+}
